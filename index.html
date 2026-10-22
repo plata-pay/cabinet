@@ -4102,16 +4102,20 @@ window.plataSetButtonBusy=function(button,busy){
 
  
  let authFlow='',requestBusy=false,recoverBusy=false;
+ const AUTH_FLOW_KEY='plata_auth_flow';
+ function saveAuthFlow(){try{if(authFlow)localStorage.setItem(AUTH_FLOW_KEY,JSON.stringify({flow:authFlow,at:Date.now()}));else localStorage.removeItem(AUTH_FLOW_KEY)}catch{}}
+ function storedAuthFlow(){try{const data=JSON.parse(localStorage.getItem(AUTH_FLOW_KEY)||'null');if(data&&data.flow&&Date.now()-data.at<25*60*1000)return data.flow;localStorage.removeItem(AUTH_FLOW_KEY)}catch{}return ''}
+ authFlow=storedAuthFlow();
  const cooldowns={telegram:0,email:0};
  const feedback=authRoot.querySelector('.auth-feedback');
  function authMessage(text,error=false){feedback.textContent=text;feedback.hidden=!text;feedback.dataset.error=String(error)}
  function updateAuthButtons(){authRoot.querySelectorAll('[data-auth-action]').forEach(button=>button.disabled=requestBusy);for(const [type,id] of [['telegram','resend-tg'],['email','resend-email']]){const button=authRoot.getElementById(id),seconds=Math.max(0,Math.ceil((cooldowns[type]-Date.now())/1000));button.disabled=requestBusy||seconds>0;if(!button.classList.contains('is-busy'))button.textContent=seconds>0?`Отправить ещё раз · ${seconds} с`:'Отправить ещё раз'}}
  const resendTicker=setInterval(()=>{if(!authFinished)updateAuthButtons()},1000);
  async function authApi(path,data={}){return window.plataWaitFor((async()=>{const response=await fetch((window.plataApiBase??(window.plataApiBase=location.hostname==='plata-pay.github.io'?'https://plata-pay.bratiah571.workers.dev':''))+'/api/auth/'+path,{method:'POST',credentials:window.plataApiBase?'include':'same-origin',headers:{'Content-Type':'application/json',...(authFlow?{Authorization:'Bearer '+authFlow}:{})},body:JSON.stringify(data),signal:window.plataTimeoutSignal(25000)});let body;try{body=await response.json()}catch{throw new Error('Сайт временно недоступен. Попробуйте позже.')};if(!response.ok){if(body.code==='ACCOUNT_BLOCKED')window.plataShowBlocked?.();const error=new Error(body.error||'Не удалось выполнить запрос.');error.status=response.status;error.retryAfter=body.retryAfter||0;throw error}return body})(),path==='resume'?10000:25000)}
- async function authRequest(work,{group,type,button}={}){if(requestBusy)return;screenVersion++;requestBusy=true;window.plataSetButtonBusy?.(button,true);authMessage('');updateAuthButtons();try{await work()}catch(error){if(type&&error.retryAfter)cooldowns[type]=Date.now()+error.retryAfter*1000;if(error.status===401){authFlow='';nextScreen(1)}if(error.status===423){setTimeout(()=>recoverAuthState(),0)}if(group){const controller=otpControllers.get(group);controller?.reset();controller?.focus()}authMessage(error.name==='TimeoutError'?'Сервер не ответил. Попробуйте ещё раз.':error instanceof TypeError?'Нет соединения с сервером. Попробуйте ещё раз.':error.message,true)}finally{window.plataSetButtonBusy?.(button,false);requestBusy=false;updateAuthButtons()}}
+ async function authRequest(work,{group,type,button}={}){if(requestBusy)return;screenVersion++;requestBusy=true;window.plataSetButtonBusy?.(button,true);authMessage('');updateAuthButtons();try{await work()}catch(error){if(type&&error.retryAfter)cooldowns[type]=Date.now()+error.retryAfter*1000;if(error.status===401){authFlow='';saveAuthFlow();nextScreen(1)}if(error.status===423){setTimeout(()=>recoverAuthState(),0)}if(group){const controller=otpControllers.get(group);controller?.reset();controller?.focus()}authMessage(error.name==='TimeoutError'?'Сервер не ответил. Попробуйте ещё раз.':error instanceof TypeError?'Нет соединения с сервером. Попробуйте ещё раз.':error.message,true)}finally{window.plataSetButtonBusy?.(button,false);requestBusy=false;updateAuthButtons()}}
  async function beginTelegram(){await authRequest(async()=>{const tg=window.plataTelegram;if(!tg?.initData)throw new Error('Откройте Plata Пэй через мини-приложение Telegram.');
  if(tg.isVersionAtLeast('6.9')){await new Promise(resolve=>{let settled=false;const timer=setTimeout(done,12000);function done(){if(settled)return;settled=true;clearTimeout(timer);resolve()}try{tg.requestWriteAccess(done)}catch{done()}})}
- const result=await authApi('start',{initData:tg.initData});authFlow=result.flow;cooldowns.telegram=Date.now()+result.retryAfter*1000;nextScreen(2);authMessage('Код отправлен в чат с ботом Plata Пэй.');},{type:'telegram',button:authRoot.querySelector('#screen-1 .bottom-btn')})}
+ const result=await authApi('start',{initData:tg.initData});authFlow=result.flow;saveAuthFlow();cooldowns.telegram=Date.now()+result.retryAfter*1000;nextScreen(2);authMessage('Код отправлен в чат с ботом Plata Пэй.');},{type:'telegram',button:authRoot.querySelector('#screen-1 .bottom-btn')})}
  async function resendTelegram(){await authRequest(async()=>{const result=await authApi('telegram/resend');cooldowns.telegram=Date.now()+result.retryAfter*1000;otpControllers.get('otp-tg-group').reset();focusAuthField();authMessage('Новый код отправлен в бота.');},{type:'telegram',button:authRoot.getElementById('resend-tg')})}
  async function skipEmail(){await authRequest(async()=>{await authApi('email/skip');await completeAuth()})}
  async function resendEmail(){await submitEmail(authRoot.getElementById('resend-email'))}
@@ -4158,7 +4162,7 @@ window.plataSetButtonBusy=function(button,busy){
  bindInputs('#otp-tg-group',(code,inputs)=>verifyCode('telegram',code,inputs,3));
  bindInputs('#otp-email-group',(code,inputs)=>verifyCode('email',code,inputs,null));
  const emailField=authRoot.getElementById('email-field');emailField.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();submitEmail()}});emailField.addEventListener('input',()=>authRoot.getElementById('email-wrap').classList.remove('shake'));
- function showAuthenticatedDashboard(user){if(authFinished)return;authFinished=true;clearAuthTimers();authFlow='';otpControllers.forEach(controller=>controller.reset());authRoot.querySelectorAll('input').forEach(input=>input.value='');if(authRoot.activeElement)authRoot.activeElement.blur();window.plataUser=user||window.plataUser;syncAuthAnimations();window.plataOpenDashboard(window.plataUser)}
+ function showAuthenticatedDashboard(user){if(authFinished)return;authFinished=true;clearAuthTimers();authFlow='';saveAuthFlow();otpControllers.forEach(controller=>controller.reset());authRoot.querySelectorAll('input').forEach(input=>input.value='');if(authRoot.activeElement)authRoot.activeElement.blur();window.plataUser=user||window.plataUser;syncAuthAnimations();window.plataOpenDashboard(window.plataUser)}
  async function completeAuth(){const result=await authApi('complete');showAuthenticatedDashboard(result.user)}
  async function finishAuth(){if(authFinished)return;await authRequest(completeAuth)}
  authRoot.querySelectorAll('[data-auth-action]').forEach(button=>button.addEventListener('click',()=>{
@@ -4193,14 +4197,14 @@ window.plataSetButtonBusy=function(button,busy){
    else return;
    if(authFinished||requestBusy||version!==screenVersion)return;
    if(state.authenticated){showAuthenticatedDashboard(state.user);return}
-   authFlow=state.flow||'';
+   authFlow=state.flow||'';saveAuthFlow();
    if(state.cooldowns)Object.assign(cooldowns,state.cooldowns);
    if(state.email)emailField.value=state.email;
    if(state.ready){await completeAuth();return}if(state.screen!==current)nextScreen(state.screen);
    repairAuthSurface();
   }catch(error){if(document.body.classList.contains('app-boot')){window.plataBootFailed(error.message);return}authMessage(error.message||'Не удалось восстановить вход.');repairAuthSurface()}finally{recoverBusy=false;if(!document.body.classList.contains('boot-failed'))document.body.classList.remove('app-boot');window.plataTelegramTheme?.();updateAuthButtons()}
  }
- window.plataRequireLogin=function(){if(!authFinished)return;authFinished=false;authFlow='';clearAuthTimers();document.body.classList.remove('history-is-open');window.plataSetView('auth');window.plataClearSensitive?.();nextScreen(1);};
+ window.plataRequireLogin=function(){if(!authFinished)return;authFinished=false;authFlow='';saveAuthFlow();clearAuthTimers();document.body.classList.remove('history-is-open');window.plataSetView('auth');window.plataClearSensitive?.();nextScreen(1);};
  function onAuthVisible(){if(document.hidden){syncAuthAnimations();return}if(document.body.classList.contains('account-blocked'))return;if(authFinished){window.plataSetView('dashboard');return}repairAuthSurface(true);recoverAuthState()}
  document.addEventListener('visibilitychange',onAuthVisible);
  window.addEventListener('pageshow',onAuthVisible);
