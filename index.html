@@ -4335,6 +4335,7 @@ if(ch>='0'&&ch<='9'){if(frac>=2)continue;if(frac>=0)frac++;v+=ch}
 else if((ch==='.'||ch===',')&&frac<0){frac=0;v+='.'}
 }
 if(v!==input.value)input.value=v;
+fit()});
 fit();
 form.addEventListener('submit',async event=>{
 event.preventDefault();
